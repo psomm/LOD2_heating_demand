@@ -1,8 +1,9 @@
 # LOD2_heating_demand
-Overview
+# Overview
 
 This repository contains the necessary scripts and data to calculate the heating demand of buildings using Level of Detail 2 (LOD2) 3D building data, along with specific U-values, air change rates, and other building parameters. It is capable of filtering building geometries based on OpenStreetMap data and address lists, calculating 3D polygon areas, and processing LOD2 data to determine the thermal characteristics of buildings.
-Structure
+
+# Structure
 
 The repository is structured as follows:
 
@@ -11,12 +12,12 @@ The repository is structured as follows:
     scripts/: Contains Python scripts for filtering LOD2 data and calculating heating demand.
     The root directory contains license information, requirements, and this README.
 
-Scripts
+# Scripts
 
     filter_LOD2.py: Filters LOD2 building data based on OpenStreetMap and a list of addresses. It also includes functions to spatially filter data using a polygon and to calculate areas of 3D polygons.
     heat_requirement_DIN_EN_12831.py: Defines the Building class that calculates the heating demand and warm water demand based on DIN EN 12831 standards. It uses building dimensions, U-values, and weather data.
 
-How to Use
+# How to Use
 
 To use the scripts and calculate heating demand:
 
@@ -26,7 +27,7 @@ To use the scripts and calculate heating demand:
     Run the filter_LOD2.py script to filter the LOD2 data based on OSM data and address lists.
     Use the calculate_heat_demand_for_lod2_area function in heat_requirement_DIN_EN_12831.py to calculate the heat demand for the filtered LOD2 area. Set the paths to your input files accordingly.
 
-Data Format
+# Data Format
 
 The expected data format for the input files is as follows:
 
@@ -34,6 +35,6 @@ The expected data format for the input files is as follows:
     GeoJSON for LOD2 and OSM data.
     CSV for address lists, containing at least the columns Stadt and Adresse.
 
-License
+# License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
