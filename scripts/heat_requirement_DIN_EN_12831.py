@@ -3,68 +3,60 @@
 # along with the weather data from a Test Reference Year (TRY) dataset, to estimate the annual heating and warm water needs. 
 # The example demonstrates the usage for three buildings with specific dimensions and U-values, outputting their volumes and calculated heat demands.
 
-
+import csv
 import pandas as pd
 import geopandas as gpd
-from math import sqrt
+
+from shapely.geometry import shape
+from geopy.geocoders import Nominatim
 
 from filter_LOD2 import spatial_filter_with_polygon, process_lod2
 
 class Building:
-    def __init__(self, ground_area, wall_area, roof_area, building_volume, fracture_windows, fracture_doors, floors,
-                 ground_u=1.5, wall_u=1.7, roof_u=1.2, window_u=1.6, door_u=2.5, air_change_rate=0.5,
-                 min_air_temp=-15, room_temp=20, max_air_temp_heating=15, ww_demand_Wh_per_m2=12800):
-        # Initialize building parameters: areas, volume, U-values (thermal transmittance), etc.
+    STANDARD_U_VALUES = {
+        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
+        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
+        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
+        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
+        'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
+    }
+
+    def __init__(self, ground_area, wall_area, roof_area, building_volume, **kwargs):
         self.ground_area = ground_area
         self.wall_area = wall_area
         self.roof_area = roof_area
-        self.building_volume = building_volume  # Building volume in cubic meters
-        self.fracture_windows = fracture_windows  # Fraction of wall area covered by windows
-        self.fracture_doors = fracture_doors  # Fraction of wall area covered by doors
-        self.floors = floors  # Number of floors
-        # U-values for various components
-        self.ground_u = ground_u
-        self.wall_u = wall_u
-        self.roof_u = roof_u
-        self.window_u = window_u
-        self.door_u = door_u
-        self.air_change_rate = air_change_rate  # Air change rate in h-1
-        # Temperature settings
-        self.min_air_temp = min_air_temp
-        self.room_temp = room_temp
-        self.max_air_temp_heating = max_air_temp_heating
-        # Warm water demand
-        self.ww_demand_Wh_per_m2 = ww_demand_Wh_per_m2
-        # Filename for TRY (Test Reference Year) data
-        self.filename_TRY = "data/TRY2015_511676144222_Jahr.dat"
+        self.building_volume = building_volume
+        # Update standard U-values with any specified during initialization
+        self.u_values = self.STANDARD_U_VALUES.copy()
+        self.u_values.update(kwargs)
 
     def import_TRY(self):
         # Import TRY data for weather conditions
         col_widths = [8, 8, 3, 3, 3, 6, 5, 4, 5, 2, 5, 4, 5, 5, 4, 5, 3]  # Column widths for the data file
         col_names = ["RW", "HW", "MM", "DD", "HH", "t", "p", "WR", "WG", "N", "x", "RF", "B", "D", "A", "E", "IL"]  # Column names
-        data = pd.read_fwf(self.filename_TRY, widths=col_widths, names=col_names, skiprows=34)  # Read the file
+        data = pd.read_fwf(self.u_values["filename_TRY"], widths=col_widths, names=col_names, skiprows=34)  # Read the file
         self.temperature = data['t'].values  # Store temperature data as numpy array
     
     def calc_heat_demand(self):
         # Calculate the areas of windows and doors and the actual wall area excluding windows and doors
-        self.window_area = self.wall_area * self.fracture_windows
-        self.door_area = self.wall_area * self.fracture_doors
+        self.window_area = self.wall_area * self.u_values["fracture_windows"]
+        self.door_area = self.wall_area * self.u_values["fracture_doors"]
         self.real_wall_area = self.wall_area - self.window_area - self.door_area
 
         # Calculate heat loss per K for each component
         heat_loss_per_K = {
-            'wall': self.real_wall_area * self.wall_u,
-            'ground': self.ground_area * self.ground_u,
-            'roof': self.roof_area * self.roof_u,
-            'window': self.window_area * self.window_u,
-            'door': self.door_area * self.door_u
+            'wall': self.real_wall_area * self.u_values["wall_u"],
+            'ground': self.ground_area * self.u_values["ground_u"],
+            'roof': self.roof_area * self.u_values["roof_u"],
+            'window': self.window_area * self.u_values["window_u"],
+            'door': self.door_area * self.u_values["door_u"]
         }
 
         self.total_heat_loss_per_K = sum(heat_loss_per_K.values())
         print(f"Transmission heat loss per K: {self.total_heat_loss_per_K:.2f} W/K")
 
         # Calculate the maximum temperature difference
-        self.dT_max_K = self.room_temp - self.min_air_temp
+        self.dT_max_K = self.u_values["room_temp"] - self.u_values["min_air_temp"]
         print(f"Maximum temperature difference: {self.dT_max_K} K")
 
         # Calculate transmission heat loss
@@ -72,7 +64,7 @@ class Building:
         print(f"Transmission heat loss: {self.transmission_heat_loss/1000:.2f} kW")
 
         # Calculate ventilation heat loss
-        self.ventilation_heat_loss = 0.34 * self.air_change_rate * self.building_volume * self.dT_max_K
+        self.ventilation_heat_loss = 0.34 * self.u_values["air_change_rate"] * self.building_volume * self.dT_max_K
         print(f"Ventilation heat loss: {self.ventilation_heat_loss/1000:.2f} kW")
 
         # Total maximum heating demand
@@ -84,17 +76,17 @@ class Building:
         self.import_TRY()
         
          # Calculate the slope and y-intercept of the linear equation to model heating demand
-        m = self.max_heating_demand / (self.min_air_temp - self.max_air_temp_heating)  # Slope
-        b = -m * self.max_air_temp_heating  # Intercept
+        m = self.max_heating_demand / (self.u_values["min_air_temp"] - self.u_values["max_air_temp_heating"])  # Slope
+        b = -m * self.u_values["max_air_temp_heating"]  # Intercept
 
         # Calculate heating demand for each hour and sum if temperature is below max_air_temp_heating
-        self.yearly_heating_demand = sum(max(m * temp + b, 0) for temp in self.temperature if temp < self.max_air_temp_heating) / 1000
+        self.yearly_heating_demand = sum(max(m * temp + b, 0) for temp in self.temperature if temp < self.u_values["max_air_temp_heating"]) / 1000
 
         print(f"Annual heating demand: {self.yearly_heating_demand:.2f} kWh")
 
     def calc_yearly_warm_water_demand(self):
         # Calculate the annual warm water demand based on area and demand per square meter
-        self.yearly_warm_water_demand = self.ww_demand_Wh_per_m2 * self.ground_area * self.floors / 1000
+        self.yearly_warm_water_demand = self.u_values["ww_demand_Wh_per_m2"] * self.ground_area * self.u_values["floors"] / 1000
         print(f"Annual warm water demand: {self.yearly_warm_water_demand:.2f} kWh")
 
     def calc_yearly_heat_demand(self):
@@ -104,6 +96,84 @@ class Building:
         # Sum to get the total annual heat demand
         self.yearly_heat_demand = self.yearly_heating_demand + self.yearly_warm_water_demand
         print(f"Total annual heat demand: {self.yearly_heat_demand:.2f} kWh")
+
+def geocode(lat, lon):
+    geolocator = Nominatim(user_agent="LOD2_heating_demand")  # Setze den user_agent auf den Namen deiner Anwendung
+    location = geolocator.reverse((lat, lon), exactly_one=True)
+    return location.address if location else "Adresse konnte nicht gefunden werden"
+
+def mittelpunkt_zu_adresse_und_schreiben(building_info, output_csv_path):
+    with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:  # Kodierung als UTF-8 festlegen
+        fieldnames = ['ID', 'Adresse', 'Ground_Area', 'Wall_Area', 'Roof_Area', 'Volume', 'ground_u', 'wall_u', 'roof_u', 'window_u', 'door_u', 'air_change_rate', 'floors', 'fracture_windows', 'fracture_doors', 'min_air_temp', 'room_temp', 'max_air_temp_heating', 'ww_demand_Wh_per_m2']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for parent_id, info in building_info.items():
+            if info['Ground']:
+                # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
+                ground_union = gpd.GeoSeries(info['Ground']).unary_union
+                centroid = ground_union.centroid
+                
+                # Erstellen eines GeoDataFrame für die Umrechnung
+                gdf = gpd.GeoDataFrame([{'geometry': centroid}], crs="EPSG:25833")
+                # Umrechnung von EPSG:25833 nach EPSG:4326
+                gdf = gdf.to_crs(epsg=4326)
+                
+                # Zugriff auf den umgerechneten Punkt
+                centroid_transformed = gdf.geometry.iloc[0]
+                lat, lon = centroid_transformed.y, centroid_transformed.x
+                adresse = geocode(lat, lon)
+                
+                # Schreibe die Daten in die CSV
+                writer.writerow({
+                    'ID': parent_id,
+                    'Adresse': adresse,
+                    'Ground_Area': info['Ground_Area'],
+                    'Wall_Area': info['Wall_Area'],
+                    'Roof_Area': info['Roof_Area'],
+                    'Volume': info['Volume'],
+                    # Füge hier die Standardwerte ein
+                    'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19, 'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5, 
+                    'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
+                    'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15, 'ww_demand_Wh_per_m2': 12800
+                })
+            else:
+                print(f"Keine Ground-Geometrie für Gebäude {parent_id} gefunden. Überspringe.")
+
+def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path, output_csv_path):
+    # Verwenden der bereits definierte Funktion, um LOD2-Daten zu filtern
+    spatial_filter_with_polygon(lod_geojson_path, polygon_shapefile_path, output_geojson_path)
+    # Verwenden von process_lod2, um die gefilterten Daten zu verarbeiten und Gebäudeinformationen zu erhalten
+    building_data = process_lod2(output_geojson_path)
+    mittelpunkt_zu_adresse_und_schreiben(building_data, output_csv_path)
+    
+    # Annahme: Standardwerte für die Gebäudeparameter
+    standard_u_values = {
+        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
+        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
+        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
+        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
+        'ww_demand_Wh_per_m2': 12800
+    }
+    
+    # Iteriere über jedes Gebäude und berechne den Wärmebedarf
+    for building_id, info in building_data.items():
+        ground_area = info['Ground_Area']
+        wall_area = info['Wall_Area']
+        roof_area = info['Roof_Area']
+        building_volume = info['Volume']
+        
+        if ground_area is not None and wall_area is not None and roof_area is not None and building_volume is not None:
+            # Erstellen eines Building-Objekts mit den berechneten Flächen und Standardwerten
+            building = Building(ground_area, wall_area, roof_area, building_volume,
+                                **standard_u_values)
+            
+            # Führen Sie die Wärmebedarfsberechnung durch
+            print(f"\nBuilding ID: {building_id}, {info}")
+            building.calc_heat_demand()
+            building.calc_yearly_heat_demand()
+        else:
+            print(f"Informationen für Gebäude {building_id} unvollständig. Überspringe Berechnung.")
 
 def test():
     ### Example building measurements for buildings on Dresdner Straße in Bautzen ###
@@ -148,46 +218,10 @@ def test():
     building3.calc_heat_demand()
     building3.calc_yearly_heat_demand()
 
-#test()
-
-def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path):
-    # Verwenden der bereits definierte Funktion, um LOD2-Daten zu filtern
-    spatial_filter_with_polygon(lod_geojson_path, polygon_shapefile_path, output_geojson_path)
-    
-    # Verwenden von process_lod2, um die gefilterten Daten zu verarbeiten und Gebäudeinformationen zu erhalten
-    building_data = process_lod2(output_geojson_path)
-    
-    # Annahme: Standardwerte für die Gebäudeparameter
-    standard_u_values = {
-        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
-        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
-        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
-        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
-        'ww_demand_Wh_per_m2': 12800
-    }
-    
-    # Iteriere über jedes Gebäude und berechne den Wärmebedarf
-    for building_id, info in building_data.items():
-        ground_area = info['Ground_Area']
-        wall_area = info['Wall_Area']
-        roof_area = info['Roof_Area']
-        building_volume = info['Volume']
-        
-        if ground_area is not None and wall_area is not None and roof_area is not None and building_volume is not None:
-            # Erstellen eines Building-Objekts mit den berechneten Flächen und Standardwerten
-            building = Building(ground_area, wall_area, roof_area, building_volume,
-                                **standard_u_values)
-            
-            # Führen Sie die Wärmebedarfsberechnung durch
-            print(f"\nBuilding ID: {building_id}, {info}")
-            building.calc_heat_demand()
-            building.calc_yearly_heat_demand()
-        else:
-            print(f"Informationen für Gebäude {building_id} unvollständig. Überspringe Berechnung.")
-
-# Setzen Sie die Pfade entsprechend Ihren Daten
-lod_geojson_path = 'examples/Bautzen/lod2_33458_5668_2_sn.geojson'
-polygon_shapefile_path = 'examples/Bautzen/filter_polygon.shp'
-output_geojson_path = 'examples/Bautzen/filtered_LOD_quartier.geojson'
-
-calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path)
+# Pfadangaben und Aufruf der Hauptfunktion
+if __name__ == "__main__":
+    lod_geojson_path = 'examples/Bautzen/lod2_33458_5668_2_sn.geojson'
+    polygon_shapefile_path = 'examples/Bautzen/filter_polygon.shp'
+    output_geojson_path = 'examples/Bautzen/filtered_LOD_quartier.geojson'
+    output_csv_path = 'examples/Bautzen/building_data.csv'
+    calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path, output_csv_path)
