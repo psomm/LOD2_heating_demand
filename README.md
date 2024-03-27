@@ -35,6 +35,10 @@ The expected data format for the input files is as follows:
     GeoJSON for LOD2 and OSM data.
     CSV for address lists, containing at least the columns Stadt and Adresse.
 
+# To Do
+
+At present, the LOD2 data must be procured in the form of a shapefile, which then requires opening with QGIS and exporting as a GeoJSON file for subsequent processing in Python. Additionally, the required polygon must be constructed using QGIS.
+
 # License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
