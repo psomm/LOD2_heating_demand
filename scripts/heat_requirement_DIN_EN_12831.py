@@ -13,20 +13,23 @@ from geopy.geocoders import Nominatim
 from filter_LOD2 import spatial_filter_with_polygon, process_lod2
 
 class Building:
-    def __init__(self, ground_area, wall_area, roof_area, building_volume, u_values=None):
+    STANDARD_U_VALUES = {
+        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
+        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
+        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
+        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
+        'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
+    }
+
+    def __init__(self, ground_area, wall_area, roof_area, building_volume, u_type=None):
         self.ground_area = ground_area
         self.wall_area = wall_area
         self.roof_area = roof_area
         self.building_volume = building_volume
-        self.u_values = {
-            'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
-            'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
-            'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
-            'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
-            'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
-        }
-        if u_values is not None:
-            self.u_values.update(u_values)
+        self.u_values = self.STANDARD_U_VALUES.copy()
+        
+        if u_type:
+            self.u_values.update(load_u_values(u_type))
 
     def import_TRY(self):
         # Import TRY data for weather conditions
@@ -96,12 +99,24 @@ class Building:
         self.yearly_heat_demand = self.yearly_heating_demand + self.yearly_warm_water_demand
         print(f"Total annual heat demand: {self.yearly_heat_demand:.2f} kWh")
 
+def load_u_values(u_type):                
+    # Angenommen, die CSV-Datei heißt 'u_values.csv' und befindet sich im gleichen Verzeichnis
+    df = pd.read_csv('data/standard_u_values.csv')
+    u_values_row = df[df['Typ'] == u_type]
+    
+    if not u_values_row.empty:
+        # Umwandeln der ersten Zeile in ein Dictionary, ohne die Typ-Spalte
+        return u_values_row.iloc[0].drop('Typ').to_dict()
+    else:
+        print(f"Keine U-Werte für Typ '{u_type}' gefunden. Verwende Standardwerte.")
+        return {}
+
 def geocode(lat, lon):
     geolocator = Nominatim(user_agent="LOD2_heating_demand")  # Setze den user_agent auf den Namen deiner Anwendung
     location = geolocator.reverse((lat, lon), exactly_one=True)
     return location.address if location else "Adresse konnte nicht gefunden werden"
 
-def mittelpunkte_und_adressen_ergaenzen(building_info):
+def calculate_centroid_and_geocode(building_info):
     for parent_id, info in building_info.items():
         if 'Ground' in info and info['Ground']:
             # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
@@ -134,7 +149,7 @@ def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path
     # Verwenden von process_lod2, um die gefilterten Daten zu verarbeiten und Gebäudeinformationen zu erhalten
     building_data = process_lod2(output_geojson_path)
     print(building_data)
-    building_data = mittelpunkte_und_adressen_ergaenzen(building_data)
+    building_data = calculate_centroid_and_geocode(building_data)
     print(building_data)
     
     # Iteriere über jedes Gebäude und berechne den Wärmebedarf
@@ -146,7 +161,7 @@ def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path
         
         if ground_area is not None and wall_area is not None and roof_area is not None and building_volume is not None:
             # Erstellen eines Building-Objekts mit den berechneten Flächen und Standardwerten
-            building = Building(ground_area, wall_area, roof_area, building_volume)
+            building = Building(ground_area, wall_area, roof_area, building_volume, u_type='TypB')
             
             # Führen Sie die Wärmebedarfsberechnung durch
             print(f"\nBuilding ID: {building_id}, {info["Adresse"]}")
