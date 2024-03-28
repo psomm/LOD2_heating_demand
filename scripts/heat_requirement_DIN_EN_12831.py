@@ -13,22 +13,20 @@ from geopy.geocoders import Nominatim
 from filter_LOD2 import spatial_filter_with_polygon, process_lod2
 
 class Building:
-    STANDARD_U_VALUES = {
-        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
-        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
-        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
-        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
-        'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
-    }
-
-    def __init__(self, ground_area, wall_area, roof_area, building_volume, **kwargs):
+    def __init__(self, ground_area, wall_area, roof_area, building_volume, u_values=None):
         self.ground_area = ground_area
         self.wall_area = wall_area
         self.roof_area = roof_area
         self.building_volume = building_volume
-        # Update standard U-values with any specified during initialization
-        self.u_values = self.STANDARD_U_VALUES.copy()
-        self.u_values.update(kwargs)
+        self.u_values = {
+            'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
+            'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
+            'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
+            'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
+            'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
+        }
+        if u_values is not None:
+            self.u_values.update(u_values)
 
     def import_TRY(self):
         # Import TRY data for weather conditions
@@ -90,6 +88,7 @@ class Building:
         print(f"Annual warm water demand: {self.yearly_warm_water_demand:.2f} kWh")
 
     def calc_yearly_heat_demand(self):
+        self.calc_heat_demand()
         # Calculate both the yearly heating and warm water demand
         self.calc_yearly_heating_demand()
         self.calc_yearly_warm_water_demand()
@@ -102,59 +101,41 @@ def geocode(lat, lon):
     location = geolocator.reverse((lat, lon), exactly_one=True)
     return location.address if location else "Adresse konnte nicht gefunden werden"
 
-def mittelpunkt_zu_adresse_und_schreiben(building_info, output_csv_path):
-    with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:  # Kodierung als UTF-8 festlegen
-        fieldnames = ['ID', 'Adresse', 'Ground_Area', 'Wall_Area', 'Roof_Area', 'Volume', 'ground_u', 'wall_u', 'roof_u', 'window_u', 'door_u', 'air_change_rate', 'floors', 'fracture_windows', 'fracture_doors', 'min_air_temp', 'room_temp', 'max_air_temp_heating', 'ww_demand_Wh_per_m2']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+def mittelpunkte_und_adressen_ergaenzen(building_info):
+    for parent_id, info in building_info.items():
+        if 'Ground' in info and info['Ground']:
+            # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
+            ground_union = gpd.GeoSeries(info['Ground']).unary_union
+            centroid = ground_union.centroid
 
-        for parent_id, info in building_info.items():
-            if info['Ground']:
-                # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
-                ground_union = gpd.GeoSeries(info['Ground']).unary_union
-                centroid = ground_union.centroid
-                
-                # Erstellen eines GeoDataFrame für die Umrechnung
-                gdf = gpd.GeoDataFrame([{'geometry': centroid}], crs="EPSG:25833")
-                # Umrechnung von EPSG:25833 nach EPSG:4326
-                gdf = gdf.to_crs(epsg=4326)
-                
-                # Zugriff auf den umgerechneten Punkt
-                centroid_transformed = gdf.geometry.iloc[0]
-                lat, lon = centroid_transformed.y, centroid_transformed.x
-                adresse = geocode(lat, lon)
-                
-                # Schreibe die Daten in die CSV
-                writer.writerow({
-                    'ID': parent_id,
-                    'Adresse': adresse,
-                    'Ground_Area': info['Ground_Area'],
-                    'Wall_Area': info['Wall_Area'],
-                    'Roof_Area': info['Roof_Area'],
-                    'Volume': info['Volume'],
-                    # Füge hier die Standardwerte ein
-                    'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19, 'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5, 
-                    'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
-                    'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15, 'ww_demand_Wh_per_m2': 12800
-                })
-            else:
-                print(f"Keine Ground-Geometrie für Gebäude {parent_id} gefunden. Überspringe.")
+            # Erstellen eines GeoDataFrame für die Umrechnung
+            gdf = gpd.GeoDataFrame([{'geometry': centroid}], crs="EPSG:25833")
+            # Umrechnung von EPSG:25833 nach EPSG:4326
+            gdf = gdf.to_crs(epsg=4326)
+
+            # Zugriff auf den umgerechneten Punkt
+            centroid_transformed = gdf.geometry.iloc[0]
+            lat, lon = centroid_transformed.y, centroid_transformed.x
+            adresse = geocode(lat, lon)
+
+            # Ergänzung der Koordinaten und der Adresse im building_info Dictionary
+            info['Koordinaten'] = (lat, lon)
+            info['Adresse'] = adresse
+        else:
+            print(f"Keine Ground-Geometrie für Gebäude {parent_id} gefunden. Überspringe.")
+            info['Koordinaten'] = None
+            info['Adresse'] = "Adresse konnte nicht gefunden werden"
+
+    return building_info
 
 def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path, output_csv_path):
     # Verwenden der bereits definierte Funktion, um LOD2-Daten zu filtern
     spatial_filter_with_polygon(lod_geojson_path, polygon_shapefile_path, output_geojson_path)
     # Verwenden von process_lod2, um die gefilterten Daten zu verarbeiten und Gebäudeinformationen zu erhalten
     building_data = process_lod2(output_geojson_path)
-    mittelpunkt_zu_adresse_und_schreiben(building_data, output_csv_path)
-    
-    # Annahme: Standardwerte für die Gebäudeparameter
-    standard_u_values = {
-        'ground_u': 0.31, 'wall_u': 0.23, 'roof_u': 0.19,
-        'window_u': 1.3, 'door_u': 1.3, 'air_change_rate': 0.5,
-        'floors': 4, 'fracture_windows': 0.10, 'fracture_doors': 0.01,
-        'min_air_temp': -15, 'room_temp': 20, 'max_air_temp_heating': 15,
-        'ww_demand_Wh_per_m2': 12800
-    }
+    print(building_data)
+    building_data = mittelpunkte_und_adressen_ergaenzen(building_data)
+    print(building_data)
     
     # Iteriere über jedes Gebäude und berechne den Wärmebedarf
     for building_id, info in building_data.items():
@@ -165,11 +146,10 @@ def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path
         
         if ground_area is not None and wall_area is not None and roof_area is not None and building_volume is not None:
             # Erstellen eines Building-Objekts mit den berechneten Flächen und Standardwerten
-            building = Building(ground_area, wall_area, roof_area, building_volume,
-                                **standard_u_values)
+            building = Building(ground_area, wall_area, roof_area, building_volume)
             
             # Führen Sie die Wärmebedarfsberechnung durch
-            print(f"\nBuilding ID: {building_id}, {info}")
+            print(f"\nBuilding ID: {building_id}, {info["Adresse"]}")
             building.calc_heat_demand()
             building.calc_yearly_heat_demand()
         else:
@@ -225,3 +205,6 @@ if __name__ == "__main__":
     output_geojson_path = 'examples/Bautzen/filtered_LOD_quartier.geojson'
     output_csv_path = 'examples/Bautzen/building_data.csv'
     calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path, output_csv_path)
+
+## adding option to load other standard configs from data file
+## adding option to load project specific data based on building data
