@@ -3,14 +3,9 @@
 # along with the weather data from a Test Reference Year (TRY) dataset, to estimate the annual heating and warm water needs. 
 # The example demonstrates the usage for three buildings with specific dimensions and U-values, outputting their volumes and calculated heat demands.
 
-import csv
 import pandas as pd
-import geopandas as gpd
 
-from shapely.geometry import shape
-from geopy.geocoders import Nominatim
-
-from filter_LOD2 import spatial_filter_with_polygon, process_lod2
+from filter_LOD2 import spatial_filter_with_polygon, process_lod2, calculate_centroid_and_geocode
 
 class Building:
     STANDARD_U_VALUES = {
@@ -21,7 +16,7 @@ class Building:
         'ww_demand_Wh_per_m2': 12800, "filename_TRY": "data/TRY2015_511676144222_Jahr.dat"
     }
 
-    def __init__(self, ground_area, wall_area, roof_area, building_volume, u_type=None):
+    def __init__(self, ground_area, wall_area, roof_area, building_volume, u_type=None, building_state=None):
         self.ground_area = ground_area
         self.wall_area = wall_area
         self.roof_area = roof_area
@@ -29,7 +24,7 @@ class Building:
         self.u_values = self.STANDARD_U_VALUES.copy()
         
         if u_type:
-            self.u_values.update(load_u_values(u_type))
+            self.u_values.update(self.load_u_values(u_type, building_state))
 
     def import_TRY(self):
         # Import TRY data for weather conditions
@@ -99,59 +94,28 @@ class Building:
         self.yearly_heat_demand = self.yearly_heating_demand + self.yearly_warm_water_demand
         print(f"Total annual heat demand: {self.yearly_heat_demand:.2f} kWh")
 
-def load_u_values(u_type):                
-    # Angenommen, die CSV-Datei heißt 'u_values.csv' und befindet sich im gleichen Verzeichnis
-    df = pd.read_csv('data/standard_u_values.csv')
-    u_values_row = df[df['Typ'] == u_type]
-    
-    if not u_values_row.empty:
-        # Umwandeln der ersten Zeile in ein Dictionary, ohne die Typ-Spalte
-        return u_values_row.iloc[0].drop('Typ').to_dict()
-    else:
-        print(f"Keine U-Werte für Typ '{u_type}' gefunden. Verwende Standardwerte.")
-        return {}
-
-def geocode(lat, lon):
-    geolocator = Nominatim(user_agent="LOD2_heating_demand")  # Setze den user_agent auf den Namen deiner Anwendung
-    location = geolocator.reverse((lat, lon), exactly_one=True)
-    return location.address if location else "Adresse konnte nicht gefunden werden"
-
-def calculate_centroid_and_geocode(building_info):
-    for parent_id, info in building_info.items():
-        if 'Ground' in info and info['Ground']:
-            # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
-            ground_union = gpd.GeoSeries(info['Ground']).unary_union
-            centroid = ground_union.centroid
-
-            # Erstellen eines GeoDataFrame für die Umrechnung
-            gdf = gpd.GeoDataFrame([{'geometry': centroid}], crs="EPSG:25833")
-            # Umrechnung von EPSG:25833 nach EPSG:4326
-            gdf = gdf.to_crs(epsg=4326)
-
-            # Zugriff auf den umgerechneten Punkt
-            centroid_transformed = gdf.geometry.iloc[0]
-            lat, lon = centroid_transformed.y, centroid_transformed.x
-            adresse = geocode(lat, lon)
-
-            # Ergänzung der Koordinaten und der Adresse im building_info Dictionary
-            info['Koordinaten'] = (lat, lon)
-            info['Adresse'] = adresse
+    def load_u_values(self, u_type, building_state):                
+        # Angenommen, die CSV-Datei heißt 'u_values.csv' und befindet sich im gleichen Verzeichnis
+        df = pd.read_csv('data/standard_u_values_TABULA.csv', sep=";")
+        u_values_row = df[df['Typ'] == u_type and df['building_state'] == building_state]
+        
+        if not u_values_row.empty:
+            # Umwandeln der ersten Zeile in ein Dictionary, ohne die Typ-Spalte
+            return u_values_row.iloc[0].drop('Typ').to_dict()
         else:
-            print(f"Keine Ground-Geometrie für Gebäude {parent_id} gefunden. Überspringe.")
-            info['Koordinaten'] = None
-            info['Adresse'] = "Adresse konnte nicht gefunden werden"
-
-    return building_info
+            print(f"Keine U-Werte für Typ '{u_type}' gefunden. Verwende Standardwerte.")
+            return {}
 
 def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path, output_geojson_path, output_csv_path):
     # Verwenden der bereits definierte Funktion, um LOD2-Daten zu filtern
     spatial_filter_with_polygon(lod_geojson_path, polygon_shapefile_path, output_geojson_path)
+
     # Verwenden von process_lod2, um die gefilterten Daten zu verarbeiten und Gebäudeinformationen zu erhalten
     building_data = process_lod2(output_geojson_path)
-    print(building_data)
+
+    # Geocodiere die Daten
     building_data = calculate_centroid_and_geocode(building_data)
-    print(building_data)
-    
+
     # Iteriere über jedes Gebäude und berechne den Wärmebedarf
     for building_id, info in building_data.items():
         ground_area = info['Ground_Area']
@@ -160,11 +124,20 @@ def calculate_heat_demand_for_lod2_area(lod_geojson_path, polygon_shapefile_path
         building_volume = info['Volume']
         
         if ground_area is not None and wall_area is not None and roof_area is not None and building_volume is not None:
+            print(f"\nBuilding ID: {building_id}, {info["Adresse"]}")
+            print('Welchen Gebäudetyp hat das Gebäude?:')
+            u_type = input()
+            #u_type='DE.N.SFH.02.GEN'
+            print('Welchen energetischen Zustand hat das Gebäude?:')
+            building_state = input()
+            #building_state = Existing_state
+            #building_state = Usual_Refurbishment
+            #building_state = Advanced_Refurbishment
+
             # Erstellen eines Building-Objekts mit den berechneten Flächen und Standardwerten
-            building = Building(ground_area, wall_area, roof_area, building_volume, u_type='TypB')
+            building = Building(ground_area, wall_area, roof_area, building_volume, u_type=u_type, building_state=building_state)
             
             # Führen Sie die Wärmebedarfsberechnung durch
-            print(f"\nBuilding ID: {building_id}, {info["Adresse"]}")
             building.calc_heat_demand()
             building.calc_yearly_heat_demand()
         else:

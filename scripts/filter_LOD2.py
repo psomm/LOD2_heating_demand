@@ -1,6 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
+from geopy.geocoders import Nominatim
 
 import numpy as np
 
@@ -138,6 +139,38 @@ def process_lod2(file_path):
         info['Volume'] = (h_traufe - h_boden) * info['Ground_Area'] if h_traufe and h_boden else None
 
         print(f"Parent ID: {parent_id}, Ground Area: {info['Ground_Area']:.2f} m², Wall Area: {info['Wall_Area']:.2f} m², Roof Area: {info['Roof_Area']:.2f} m², Volume: {info['Volume']:.2f} m³")
+
+    return building_info
+
+def geocode(lat, lon):
+    geolocator = Nominatim(user_agent="LOD2_heating_demand")  # Setze den user_agent auf den Namen deiner Anwendung
+    location = geolocator.reverse((lat, lon), exactly_one=True)
+    return location.address if location else "Adresse konnte nicht gefunden werden"
+
+def calculate_centroid_and_geocode(building_info):
+    for parent_id, info in building_info.items():
+        if 'Ground' in info and info['Ground']:
+            # Vereinigung aller Ground-Geometrien und Berechnung des Zentrums
+            ground_union = gpd.GeoSeries(info['Ground']).unary_union
+            centroid = ground_union.centroid
+
+            # Erstellen eines GeoDataFrame für die Umrechnung
+            gdf = gpd.GeoDataFrame([{'geometry': centroid}], crs="EPSG:25833")
+            # Umrechnung von EPSG:25833 nach EPSG:4326
+            gdf = gdf.to_crs(epsg=4326)
+
+            # Zugriff auf den umgerechneten Punkt
+            centroid_transformed = gdf.geometry.iloc[0]
+            lat, lon = centroid_transformed.y, centroid_transformed.x
+            adresse = geocode(lat, lon)
+
+            # Ergänzung der Koordinaten und der Adresse im building_info Dictionary
+            info['Koordinaten'] = (lat, lon)
+            info['Adresse'] = adresse
+        else:
+            print(f"Keine Ground-Geometrie für Gebäude {parent_id} gefunden. Überspringe.")
+            info['Koordinaten'] = None
+            info['Adresse'] = "Adresse konnte nicht gefunden werden"
 
     return building_info
 
