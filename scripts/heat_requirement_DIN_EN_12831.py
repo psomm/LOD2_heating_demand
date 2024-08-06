@@ -97,7 +97,7 @@ class Building:
     def load_u_values(self, u_type, building_state):                
         # Angenommen, die CSV-Datei heißt 'u_values.csv' und befindet sich im gleichen Verzeichnis
         df = pd.read_csv('data/standard_u_values_TABULA.csv', sep=";")
-        u_values_row = df[df['Typ'] == u_type and df['building_state'] == building_state]
+        u_values_row = df[(df['Typ'] == u_type) & (df['building_state'] == building_state)]
         
         if not u_values_row.empty:
             # Umwandeln der ersten Zeile in ein Dictionary, ohne die Typ-Spalte
